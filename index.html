@@ -67,7 +67,7 @@
     </div>
     <div id="gui-container"></div>
     <div id="debug-overlay">
-        <h3>📊 Simulation Stats <span style="font-size: 0.7rem; color: rgba(255,255,255,0.5); font-weight: normal;" id="version-display">v2.0.0 #44</span></h3>
+        <h3>📊 Simulation Stats <span style="font-size: 0.7rem; color: rgba(255,255,255,0.5); font-weight: normal;" id="version-display">v2.0.0 #47</span></h3>
         <div class="stat"><span class="stat-label">FPS</span><span class="stat-value" id="stat-fps">--</span></div>
         <div class="stat"><span class="stat-label">Sim Steps/s</span><span class="stat-value" id="stat-steps">--</span></div>
         <div class="stat"><span class="stat-label">Agents Alive</span><span class="stat-value" id="stat-agents">--</span></div>
@@ -80,6 +80,7 @@
         <div class="stat"><span class="stat-label">🪵 Sticks</span><span class="stat-value" id="stat-sticks">--</span></div>
         <div class="stat"><span class="stat-label">🪨 Stone</span><span class="stat-value" id="stat-stone">--</span></div>
         <div class="stat"><span class="stat-label">🌿 Vines</span><span class="stat-value" id="stat-vines">--</span></div>
+        <div class="stat"><span class="stat-label">🗡️ Spears</span><span class="stat-value" id="stat-spears">--</span></div>
         <div class="stat"><span class="stat-label">🏠 Stash</span><span class="stat-value" id="stat-stash">🥥0 🪵0 🪨0 🌿0 🐟0 🗡️0</span></div>
         <div class="stat"><span class="stat-label">🔨 Crafting</span><span class="stat-value" id="stat-crafting">None</span></div>
         <div class="stat"><span class="stat-label">📋 Tasks</span><span class="stat-value" id="stat-tasks">--</span></div>
@@ -679,14 +680,25 @@ function updateStats(data) {
     // Update agent inventories display
     const inventoriesDiv = document.getElementById('agent-inventories');
     if (inventoriesDiv && tribeMembers) {
+        // Get hut spears for display
+        const hutSpearsDisplay = (sharedStash.fishing_spear || 0);
         const stashLine = `<div style="padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.25);font-weight:600;">
-            🏠 Hut: 🥥${sharedStash.coconuts} 🪵${sharedStash.wood} 🪨${sharedStash.stone} 🌿${sharedStash.vines} 🐟${sharedStash.mullet + sharedStash.parrotfish + sharedStash.grouper}
+            🏠 Hut: 🥥${sharedStash.coconuts} 🪵${sharedStash.wood} 🪨${sharedStash.stone} 🌿${sharedStash.vines} 🐟${sharedStash.mullet + sharedStash.parrotfish + sharedStash.grouper} 🗡️${hutSpearsDisplay}
         </div>`;
         const agentsHtml = tribeMembers.filter(a => a.alive).map(a => {
             const inv = a.inventory;
             const tools = [];
-            if (a.tools.gatheringStick) tools.push(`🔧${a.tools.gatheringStick.durability}`);
-            if (a.tools.stoneAxe) tools.push(`🪓${a.tools.stoneAxe.durability}`);
+            if (a.tools && a.tools.gatheringStick) tools.push(`🔧${a.tools.gatheringStick.durability}`);
+            if (a.tools && a.tools.stoneAxe) tools.push(`🪓${a.tools.stoneAxe.durability}`);
+            
+            // Get spear count from inventory tools
+            let spearCount = 0;
+            if (inv && inv.tools && inv.tools.has('fishing_spear')) {
+                const spearData = inv.tools.get('fishing_spear');
+                spearCount = spearData.count || 1;
+            }
+            if (spearCount > 0) tools.push(`🗡️${spearCount}`);
+            
             const toolStr = tools.length > 0 ? ` [${tools.join(' ')}]` : '';
             const eff = a.efficiency !== undefined ? ` · ⚙️${Math.round(a.efficiency * 100)}%` : '';
             const objective = a.currentObjective ? ` · 🎯${a.currentObjective}` : '';
@@ -694,16 +706,20 @@ function updateStats(data) {
                 'idle': '😴', 'walking': '🚶', 'gathering': '🌴', 'gathering_wood': '🪵',
                 'gathering_stone': '🪨', 'gathering_vine': '🌿', 'eating': '🍽️',
                 'resting': '💤', 'crafting': '🔨', 'pickingUp': '🤲', 'giving': '🤝',
-                'fishing': '🎣'
+                'fishing': '🎣', 'hauling': '📦'
             }[a.state] || '❓';
-            const mullet = inv.mullet || 0;
-            const parrot = inv.parrotfish || 0;
-            const grouper = inv.grouper || 0;
+            const mullet = inv?.mullet || 0;
+            const parrot = inv?.parrotfish || 0;
+            const grouper = inv?.grouper || 0;
+            const coconuts = inv?.coconuts || getInventoryCount?.(inv, 'coconut') || 0;
+            const wood = inv?.wood || getInventoryCount?.(inv, 'wood') || 0;
+            const stone = inv?.stone || getInventoryCount?.(inv, 'stone') || 0;
+            const vines = inv?.vines || getInventoryCount?.(inv, 'vine') || 0;
             const fishStr = (mullet + parrot + grouper) > 0
                 ? ` 🐟${mullet}${parrot ? ' 🐠'+parrot : ''}${grouper ? ' 🐡'+grouper : ''}`
                 : '';
             return `<div style="padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.1);">
-                ${stateEmoji} <b>${a.id.split('_')[1]}</b>: 🥥${inv.coconuts} 🪵${inv.wood} 🪨${inv.stone} 🌿${inv.vines}${fishStr}${toolStr}${objective}${eff}
+                ${stateEmoji} <b>${a.id.split('_')[1]}</b>: 🥥${coconuts} 🪵${wood} 🪨${stone} 🌿${vines}${fishStr}${toolStr}${objective}${eff}
             </div>`;
         }).join('');
         inventoriesDiv.innerHTML = stashLine + agentsHtml;

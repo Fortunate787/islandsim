@@ -475,6 +475,15 @@ export function hasTool(inventory, toolId) {
     return inventory.tools.has(toolId);
 }
 
+/**
+ * Get tool count (for tools that can have multiple instances like spears)
+ */
+export function getToolCount(inventory, toolId) {
+    const toolData = inventory.tools.get(toolId);
+    if (!toolData) return 0;
+    return toolData.count || 1; // Default to 1 if no count property
+}
+
 // ============================================
 // FOOD & SPOILAGE
 // ============================================

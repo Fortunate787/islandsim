@@ -15,6 +15,7 @@ export class TribeCoordinator {
         this.taskAssignments = new Map(); // agentId -> assigned task priority
         this.criticalNeeds = new Map(); // agentId -> { hunger, energy, needsHelp }
         this.claimedResources = new Map(); // resourceTargetId -> agentId (prevents duplicates)
+        this.claimedTasks = new Map(); // taskKey -> agentId (prevents multiple agents on same task)
     }
 
     /**
@@ -39,6 +40,16 @@ export class TribeCoordinator {
                 for (const [resourceId, agentId] of this.claimedResources.entries()) {
                     if (agentId === member.id) {
                         this.claimedResources.delete(resourceId);
+                    }
+                }
+            }
+            
+            // Clean up task claims for agents that changed tasks
+            for (const [taskKey, agentId] of this.claimedTasks.entries()) {
+                if (agentId === member.id) {
+                    // Check if agent still has this task
+                    if (!member.task || this.getTaskKey(member.task) !== taskKey) {
+                        this.claimedTasks.delete(taskKey);
                     }
                 }
             }
@@ -312,14 +323,22 @@ export function improvedPlanTask(member, tribeMembers, hut, coordinator, findHel
         if (fishersCount < maxFishers) {
             const nearestFish = findHelpers.findNearestFish(member);
             if (nearestFish) {
-                member.state = 'walking';
-                member.task = {
-                    type: 'go_fishing',
-                    target: nearestFish,
-                    priority: 'medium'
-                };
-                member.targetAngle = findHelpers.angleTo(member.mesh.position, nearestFish.mesh.position);
-                return;
+                const taskKey = coordinator.getTaskKey({ type: 'go_fishing', target: nearestFish });
+                
+                // Check if this specific fish is already claimed
+                if (!coordinator.isTaskClaimed(taskKey, member.id)) {
+                    // Claim this specific fishing task
+                    coordinator.claimTask(taskKey, member.id);
+                    
+                    member.state = 'walking';
+                    member.task = {
+                        type: 'go_fishing',
+                        target: nearestFish,
+                        priority: 'medium'
+                    };
+                    member.targetAngle = findHelpers.angleTo(member.mesh.position, nearestFish.mesh.position);
+                    return;
+                }
             }
         }
     }
@@ -340,25 +359,27 @@ export function improvedPlanTask(member, tribeMembers, hut, coordinator, findHel
         if (resource.urgency > 0.3) { // Only gather if somewhat needed
             const target = resource.findFunc(member, coordinator); // Pass coordinator to check claims
             if (target) {
-                // Check if too many agents are already gathering this
                 const gatherType = `gather_${resource.type}`;
-                const workersCount = coordinator.countAgentsOnTask(tribeMembers, gatherType);
-                const optimalWorkers = Math.ceil(tribeMembers.filter(m => m.alive).length * resource.urgency * 0.6);
-
-                if (workersCount < optimalWorkers) {
-                    // Claim this resource to prevent others from targeting it
-                    coordinator.claimResource(target, member.id);
-
-                    member.state = 'walking';
-                    member.task = {
-                        type: gatherType,
-                        target: target,
-                        resourceId: resource.type === 'coconuts' ? 'coconut' : resource.type,
-                        priority: 'low'
-                    };
-                    member.targetAngle = findHelpers.angleTo(member.mesh.position, target.position);
-                    return;
+                const taskKey = coordinator.getTaskKey({ type: gatherType, target: target });
+                
+                // Check if this specific task is already claimed
+                if (coordinator.isTaskClaimed(taskKey, member.id)) {
+                    continue; // Skip this resource, try next
                 }
+
+                // Claim this specific task to prevent others from targeting it
+                coordinator.claimTask(taskKey, member.id);
+                coordinator.claimResource(target, member.id);
+
+                member.state = 'walking';
+                member.task = {
+                    type: gatherType,
+                    target: target,
+                    resourceId: resource.type === 'coconuts' ? 'coconut' : resource.type,
+                    priority: 'low'
+                };
+                member.targetAngle = findHelpers.angleTo(member.mesh.position, target.position);
+                return;
             }
         }
     }
@@ -372,18 +393,25 @@ export function improvedPlanTask(member, tribeMembers, hut, coordinator, findHel
     const leastStocked = resourceTasks[0]; // Already sorted by urgency
     const target = leastStocked.findFunc(member, coordinator); // Pass coordinator
     if (target) {
-        // Claim this resource
-        coordinator.claimResource(target, member.id);
+        const gatherType = `gather_${leastStocked.type}`;
+        const taskKey = coordinator.getTaskKey({ type: gatherType, target: target });
+        
+        // Check if this specific task is already claimed
+        if (!coordinator.isTaskClaimed(taskKey, member.id)) {
+            // Claim this specific task
+            coordinator.claimTask(taskKey, member.id);
+            coordinator.claimResource(target, member.id);
 
-        member.state = 'walking';
-        member.task = {
-            type: `gather_${leastStocked.type}`,
-            target: target,
-            resourceId: leastStocked.type === 'coconuts' ? 'coconut' : leastStocked.type,
-            priority: 'maintenance'
-        };
-        member.targetAngle = findHelpers.angleTo(member.mesh.position, target.position);
-        return;
+            member.state = 'walking';
+            member.task = {
+                type: gatherType,
+                target: target,
+                resourceId: leastStocked.type === 'coconuts' ? 'coconut' : leastStocked.type,
+                priority: 'maintenance'
+            };
+            member.targetAngle = findHelpers.angleTo(member.mesh.position, target.position);
+            return;
+        }
     }
 
     // ============================================

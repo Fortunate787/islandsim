@@ -64,7 +64,8 @@ export function updateStats(data) {
         'stat-coconuts': `${stats.coconutsAvailable}`,
         'stat-stash': stats.stashDisplay || '🥥0 🪵0 🪨0 🌿0 🐟0 🗡️0',
         'stat-crafting': stats.craftingStatus || 'None',
-        'stat-tasks': stats.taskStatus || '--'
+        'stat-tasks': stats.taskStatus || '--',
+        'stat-spears': stats.totalSpears !== undefined ? `${stats.totalSpears} (🏠${stats.hutSpears || 0})` : '--'
     };
     
     for (const [id, value] of Object.entries(elements)) {

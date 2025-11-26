@@ -27,7 +27,8 @@ import {
     consumeCraftingResources,
     addTool,
     equipTool,
-    useTool
+    useTool,
+    getToolCount
 } from './systems/resources.js';
 import { 
     createAgentNeeds,
@@ -1131,8 +1132,15 @@ function executeAgentState(member, delta) {
 
 function idleBob(member, delta) {
     const mesh = member.mesh;
-    member.walkPhase += delta * 2;
-    mesh.position.y = getTerrainHeight(mesh.position.x, mesh.position.z) + Math.sin(member.walkPhase) * 0.015;
+    member.walkPhase = (member.walkPhase || 0) + delta * 2;
+    // ALWAYS snap to terrain to prevent glitching through map
+    const terrainY = getTerrainHeight(mesh.position.x, mesh.position.z);
+    const bob = Math.sin(member.walkPhase) * 0.015;
+    mesh.position.y = terrainY + bob;
+    // Ensure we never sink below terrain
+    if (mesh.position.y < terrainY) {
+        mesh.position.y = terrainY + bob;
+    }
 
     member.leftLeg.rotation.x *= 0.9;
     member.rightLeg.rotation.x *= 0.9;
@@ -1197,8 +1205,11 @@ function updateWalking(member, delta) {
         mesh.position.x += Math.sin(mesh.rotation.y) * speed;
         mesh.position.z += Math.cos(mesh.rotation.y) * speed;
 
+        // ALWAYS snap to terrain to prevent glitching through map
         const terrainY = getTerrainHeight(mesh.position.x, mesh.position.z);
-        mesh.position.y = terrainY + Math.abs(Math.sin(member.walkPhase)) * 0.04;
+        const baseHeight = terrainY;
+        const bounce = Math.abs(Math.sin(member.walkPhase)) * 0.04;
+        mesh.position.y = baseHeight + bounce;
 
         // CRITICAL: Prevent agents from entering ocean (deadly!)
         const distFromCenter = Math.sqrt(mesh.position.x ** 2 + mesh.position.z ** 2);
@@ -1206,11 +1217,17 @@ function updateWalking(member, delta) {
         if (mesh.position.y < minSafeHeight || distFromCenter > CONFIG.islandRadius * 0.88) {
             // Too close to water or too far out - move back to safety
             member.targetAngle = Math.atan2(-mesh.position.x, -mesh.position.z);
-            // Force position back on land
+            // Force position back on land with proper terrain snapping
             const safeDist = CONFIG.islandRadius * 0.85;
             mesh.position.x = Math.cos(member.targetAngle) * safeDist;
             mesh.position.z = Math.sin(member.targetAngle) * safeDist;
-            mesh.position.y = Math.max(getTerrainHeight(mesh.position.x, mesh.position.z), minSafeHeight);
+            const safeTerrainY = getTerrainHeight(mesh.position.x, mesh.position.z);
+            mesh.position.y = Math.max(safeTerrainY + bounce, minSafeHeight);
+        } else {
+            // Ensure we never sink below terrain
+            if (mesh.position.y < terrainY) {
+                mesh.position.y = terrainY + bounce;
+            }
         }
     }
 }
@@ -1241,15 +1258,26 @@ function updateGathering(member, delta, coordinator = null) {
         mesh.rotation.y += angleDiff2 * delta * 4;
         mesh.position.x += Math.sin(mesh.rotation.y) * speed;
         mesh.position.z += Math.cos(mesh.rotation.y) * speed;
+        // ALWAYS snap to terrain to prevent glitching through map
         const terrainY = getTerrainHeight(mesh.position.x, mesh.position.z);
-        mesh.position.y = terrainY + Math.abs(Math.sin((member.walkPhase || 0) * 5)) * 0.04;
+        const bounce = Math.abs(Math.sin((member.walkPhase || 0) * 5)) * 0.04;
+        mesh.position.y = terrainY + bounce;
+        // Ensure we never sink below terrain
+        if (mesh.position.y < terrainY) {
+            mesh.position.y = terrainY + bounce;
+        }
         return; // Still walking to resource
     }
 
     // Now at gathering distance - play animations
     // Use improved animations based on resource type
     member.walkPhase = (member.walkPhase || 0) + delta * 10;
-
+    
+    // Keep agent properly positioned on terrain while gathering
+    const terrainY = getTerrainHeight(mesh.position.x, mesh.position.z);
+    mesh.position.y = terrainY;
+    
+    // Play appropriate gathering animation
     if (task.resourceId === 'coconut' || task.resourceId === 'coconuts') {
         AnimationSystem.animateCoconutGathering(member, delta, member.walkPhase);
     } else if (task.resourceId === 'wood') {
@@ -1287,26 +1315,28 @@ function updateGathering(member, delta, coordinator = null) {
 
     addToInventory(member.inventory, task.resourceId, amount);
 
-    // Visually update world for coconuts
+    // DON'T remove resources from world - they stay visible until agent picks them up
+    // The visual will appear on agent's head via updateCarryVisual
+    // Only update the count for coconuts on trees
     if (task.type === 'gather_coconuts' && task.targetTree && task.targetTree.userData.coconuts > 0) {
         const taken = Math.min(amount, task.targetTree.userData.coconuts);
         task.targetTree.userData.coconuts -= taken;
-        for (let i = 0; i < taken; i++) {
-            const coconutMesh = task.targetTree.children.find(c => c.userData.isCoconut);
-            if (coconutMesh) {
-                task.targetTree.remove(coconutMesh);
-            }
-        }
+        // Keep coconut meshes visible - they'll appear on agent's head instead
     }
 
     awardXP(member.skills, task.resourceId === 'coconut' ? 'gather_coconut' :
         (task.resourceId === 'wood' ? 'gather_wood' : 'gather_stone'), []);
 
+    // Update carrying visual - resources now appear on agent's head
     CarryingSystem.updateCarryVisual(member);
 
-    // Release resource claim after gathering (resource consumed/collected)
+    // Release resource and task claims after gathering
     if (tribeCoordinator && task.target) {
         tribeCoordinator.releaseResource(task.target, member.id);
+        const taskKey = tribeCoordinator.getTaskKey(task);
+        if (taskKey) {
+            tribeCoordinator.releaseTask(taskKey, member.id);
+        }
     }
 
     // After gather, immediately haul to hut
@@ -1326,10 +1356,16 @@ function updateFishing(member, delta) {
     // CRITICAL: Never allow agents to go into ocean - fishing is from SHORE ONLY
     const agentY = member.mesh.position.y;
     if (agentY < CONFIG.waterLevel + 0.3) {
-        // Agent is in water - emergency escape!
+            // Agent is in water - emergency escape!
         member.state = 'walking';
         member.task = { type: 'escape_water' };
         fishingSystem.releaseFish(task.target, member.id);
+        if (tribeCoordinator) {
+            const taskKey = tribeCoordinator.getTaskKey(task);
+            if (taskKey) {
+                tribeCoordinator.releaseTask(taskKey, member.id);
+            }
+        }
         return;
     }
 
@@ -1347,6 +1383,12 @@ function updateFishing(member, delta) {
         member.state = 'idle';
         member.task = null;
         fishingSystem.releaseFish(task.target, member.id);
+        if (tribeCoordinator) {
+            const taskKey = tribeCoordinator.getTaskKey(task);
+            if (taskKey) {
+                tribeCoordinator.releaseTask(taskKey, member.id);
+            }
+        }
         return;
     }
 
@@ -1375,6 +1417,12 @@ function updateFishing(member, delta) {
             member.state = 'idle';
             member.task = null;
             fishingSystem.releaseFish(task.target, member.id);
+            if (tribeCoordinator) {
+                const taskKey = tribeCoordinator.getTaskKey(task);
+                if (taskKey) {
+                    tribeCoordinator.releaseTask(taskKey, member.id);
+                }
+            }
             CarryingSystem.removeSpear(member); // Remove visual
             return;
         }
@@ -1386,8 +1434,20 @@ function updateFishing(member, delta) {
 
         // Add fish to inventory
         FishingSystem.addFishToInventory(member.inventory);
-        FishingSystem.removeFish(task.target, fishList, scene);
+        // DON'T remove fish from world - it appears on agent's head instead
+        // FishingSystem.removeFish(task.target, fishList, scene);
         fishingSystem.releaseFish(task.target, member.id);
+
+        // Release task claim
+        if (tribeCoordinator) {
+            const taskKey = tribeCoordinator.getTaskKey(task);
+            if (taskKey) {
+                tribeCoordinator.releaseTask(taskKey, member.id);
+            }
+        }
+
+        // Update carrying visual - fish appears on agent's head
+        CarryingSystem.updateCarryVisual(member);
 
         // Award XP (fishing skill improves success rate)
         awardXP(member.skills, 'fishing', []);
@@ -1591,6 +1651,10 @@ function onDestinationReached(member) {
             // Fish moved away, replan - release claim
             if (tribeCoordinator && task.target) {
                 tribeCoordinator.releaseResource(task.target, member.id);
+                const taskKey = tribeCoordinator.getTaskKey(task);
+                if (taskKey) {
+                    tribeCoordinator.releaseTask(taskKey, member.id);
+                }
             }
             if (fishingSystem && task.target) {
                 fishingSystem.releaseFish(task.target, member.id);
@@ -1970,9 +2034,8 @@ function canCraftSpear(hut) {
 function getTotalSpearsInTribeAndHut() {
     let total = hut ? (hut.storage.fishing_spear || 0) : 0;
     tribeMembers.forEach(m => {
-        const tools = m.inventory?.tools;
-        if (tools?.has('fishing_spear')) {
-            total += 1;
+        if (m.alive && m.inventory) {
+            total += getToolCount(m.inventory, 'fishing_spear');
         }
     });
     return total;
@@ -2222,7 +2285,19 @@ function animate() {
     const hutFish = hut ? (hut.storage.fish || 0) : 0;
     const hutSpears = hut ? (hut.storage.fishing_spear || 0) : 0;
     
+    // Calculate total spears across all agents
+    let totalAgentSpears = 0;
+    tribeMembers.forEach(m => {
+        if (m.alive && m.inventory) {
+            totalAgentSpears += getToolCount(m.inventory, 'fishing_spear');
+        }
+    });
+    const totalSpears = hutSpears + totalAgentSpears;
+    
     const stashDisplay = `🥥${hutCoconuts} 🪵${hutWood} 🪨${hutStone} 🌿${hutVines} 🐟${hutFish} 🗡️${hutSpears}`;
+    
+    // Add spear stats for Resources section
+    const totalSpearsDisplay = totalSpears;
     
     // Calculate crafting status
     const craftingAgents = tribeMembers.filter(m => 
@@ -2270,7 +2345,9 @@ function animate() {
         coconutsAvailable,
         stashDisplay,
         craftingStatus,
-        taskStatus: taskStatus || 'Idle'
+        taskStatus: taskStatus || 'Idle',
+        totalSpears: totalSpearsDisplay,
+        hutSpears: hutSpears
     });
     
     // Render
