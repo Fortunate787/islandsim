@@ -33,6 +33,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Update build number
+        run: |
+          COMMIT_COUNT=$(git rev-list --count HEAD)
+          sed -i "s/export const BUILD_NUMBER = [0-9]*;/export const BUILD_NUMBER = ${COMMIT_COUNT};/" src/config.js
+          echo "Updated BUILD_NUMBER to ${COMMIT_COUNT}"
+
       - name: Build
         run: npm run build
         env:
