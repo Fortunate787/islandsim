@@ -1105,10 +1105,7 @@ function executeAgentState(member, delta) {
 
         case 'walking':
         case 'hauling':
-            // Ensure carrying visuals persist during walking/hauling
-            if (member.inventory && member.inventory.slots.size > 0) {
-                CarryingSystem.updateCarryVisual(member);
-            }
+            // Visuals persist automatically - only update if inventory changed
             updateWalking(member, delta);
             break;
 

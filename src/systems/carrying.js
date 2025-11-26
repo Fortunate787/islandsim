@@ -184,36 +184,59 @@ export class CarryingSystem {
      * Update carry visual based on inventory
      */
     static updateCarryVisual(member) {
-        // Clear existing carry visuals
-        this.clearCarryVisual(member);
+        if (!member.inventory) return;
 
-        if (!member.inventory || member.inventory.slots.size === 0) {
+        // Check if we already have the correct visuals
+        const currentSlots = member.inventory.slots.size;
+        if (currentSlots === 0) {
+            this.clearCarryVisual(member);
             return;
         }
 
         // Determine what to show (priority: stone > wood > fish > coconut)
         const slots = Array.from(member.inventory.slots.entries());
+        let primaryResource = null;
+        let primaryCount = 0;
 
-        for (const [resourceId, slot] of slots) {
-            let mesh = null;
-
-            if (resourceId === 'stone') {
-                mesh = this.createStoneMesh(slot.count);
-            } else if (resourceId === 'wood') {
-                mesh = this.createWoodMesh(slot.count);
-            } else if (resourceId === 'fish') {
-                mesh = this.createFishMesh(slot.count);
-            } else if (resourceId === 'coconut') {
-                mesh = this.createCoconutMesh(slot.count);
-            }
-
-            if (mesh) {
-                member.mesh.add(mesh);
-                if (!member.carryMeshes) member.carryMeshes = [];
-                member.carryMeshes.push(mesh);
-                // Only show one type at a time (prioritized above)
+        // Check in priority order
+        const priority = ['stone', 'wood', 'fish', 'coconut'];
+        for (const resourceId of priority) {
+            if (member.inventory.slots.has(resourceId)) {
+                const slot = member.inventory.slots.get(resourceId);
+                primaryResource = resourceId;
+                primaryCount = slot.count;
                 break;
             }
+        }
+
+        // Check if we already have the right visual
+        if (member.carryMeshes && member.carryMeshes.length > 0) {
+            const existing = member.carryMeshes[0];
+            if (existing.userData.resourceType === primaryResource && existing.userData.count === primaryCount) {
+                return; // Already showing the correct visual
+            }
+        }
+
+        // Clear and recreate only if needed
+        this.clearCarryVisual(member);
+
+        if (!primaryResource) return;
+
+        let mesh = null;
+        if (primaryResource === 'stone') {
+            mesh = this.createStoneMesh(primaryCount);
+        } else if (primaryResource === 'wood') {
+            mesh = this.createWoodMesh(primaryCount);
+        } else if (primaryResource === 'fish') {
+            mesh = this.createFishMesh(primaryCount);
+        } else if (primaryResource === 'coconut') {
+            mesh = this.createCoconutMesh(primaryCount);
+        }
+
+        if (mesh) {
+            member.mesh.add(mesh);
+            if (!member.carryMeshes) member.carryMeshes = [];
+            member.carryMeshes.push(mesh);
         }
     }
 
